@@ -1,0 +1,60 @@
+name: Copilot Autofix
+
+# Trigger Copilot to fix a bug whenever an issue is labeled "bug".
+# Copilot will analyze the issue, check out the relevant branch, implement a
+# fix, and open a pull request — all automatically.
+#
+# Prerequisites
+# ─────────────
+# 1. GitHub Copilot must be enabled for this repository (or its organization).
+# 2. The repository must grant the "Copilot coding agent" access.
+#    Settings → GitHub Copilot → Coding agent → Allow
+# 3. The workflow needs `issues: write` and `pull-requests: write` permissions
+#    so the Copilot agent can push a branch and open a PR.
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  assign-to-copilot:
+    name: Assign bug to Copilot coding agent
+    if: github.event.label.name == 'bug'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign issue to Copilot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+
+            // Assign the issue to the copilot bot so the coding agent picks it up.
+            // The special username that triggers the Copilot coding agent is
+            // "Copilot" (case-insensitive) – GitHub resolves it internally.
+            await github.rest.issues.addAssignees({
+              owner:         context.repo.owner,
+              repo:          context.repo.repo,
+              issue_number:  issue.number,
+              assignees:     ['Copilot'],
+            });
+
+            console.log(`Assigned issue #${issue.number} to Copilot.`);
+
+            // Leave a comment so humans know what's happening.
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: issue.number,
+              body: [
+                '🤖 **PestControl:** This issue has been assigned to the **GitHub Copilot coding agent**.',
+                '',
+                'Copilot will analyze the problem, implement a fix on a new branch, and open a pull request shortly.',
+                '',
+                'If you would like to guide the fix, add a comment describing the expected behavior or pointing to the relevant files.',
+              ].join('\n'),
+            });
