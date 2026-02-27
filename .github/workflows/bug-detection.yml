@@ -85,6 +85,36 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # ── Arduino ──────────────────────────────────────────────────────
+          if compgen -G "*.ino" > /dev/null; then
+            echo "::group::Arduino checks"
+            # Install arduino-cli if not present
+            if ! command -v arduino-cli > /dev/null 2>&1; then
+              curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+                | BINDIR=/usr/local/bin sh 2>&1 || true
+            fi
+            if command -v arduino-cli > /dev/null 2>&1; then
+              arduino-cli config init --overwrite 2>&1 || true
+              arduino-cli core update-index 2>&1 || true
+              # Install the AVR core (covers Uno/Nano/Mega — the most common boards)
+              arduino-cli core install arduino:avr 2>&1 || true
+              # Compile every sketch found in the repository
+              SKETCH_ERRORS=0
+              while IFS= read -r ino_file; do
+                sketch_dir="$(dirname "$ino_file")"
+                echo "Compiling sketch: $sketch_dir"
+                arduino-cli compile --fqbn arduino:avr:uno "$sketch_dir" 2>&1 \
+                  | tee -a /tmp/test-output.txt || SKETCH_ERRORS=$((SKETCH_ERRORS + 1))
+              done < <(find . -name "*.ino" -not -path "*/\.*")
+              if [ "$SKETCH_ERRORS" -gt 0 ]; then
+                ERRORS+="Arduino sketch compilation failed.\n"
+              fi
+            else
+              echo "arduino-cli not available; skipping Arduino checks."
+            fi
+            echo "::endgroup::"
+          fi
+
           # ── C++ ──────────────────────────────────────────────────────────
           if [ -f "CMakeLists.txt" ] || [ -f "Makefile" ]; then
             echo "::group::C++ checks"

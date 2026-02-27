@@ -59,6 +59,7 @@ Push / PR  ──►  Bug Detection workflow
 | Ruby | `bundle exec rspec` | — |
 | Java | `mvn test` | — |
 | C++ | `ctest` (CMake) / `make test` | `cppcheck` |
+| Arduino | `arduino-cli compile` | — |
 
 ---
 

@@ -60,6 +60,7 @@ Closes #<issue-number>
 | Ruby | `bundle exec rspec` | `rubocop` |
 | Java | `mvn test` | — |
 | C++ | `ctest` (CMake) / `make test` | `cppcheck` |
+| Arduino | `arduino-cli compile` | — |
 
 Run the appropriate commands for this repository before opening the PR to
 confirm all checks pass.
