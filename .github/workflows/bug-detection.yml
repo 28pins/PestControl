@@ -1,0 +1,184 @@
+name: Bug Detection
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect-bugs:
+    name: Detect Bugs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect language and run checks
+        id: checks
+        shell: bash
+        run: |
+          ERRORS=""
+
+          # ── Node / JavaScript / TypeScript ─────────────────────────────────
+          if [ -f "package.json" ]; then
+            echo "::group::Node.js checks"
+            npm ci --prefer-offline 2>&1 || true
+
+            # Run tests if a test script exists
+            if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)" 2>/dev/null; then
+              npm test 2>&1 | tee /tmp/test-output.txt || ERRORS+="Tests failed.\n"
+            fi
+
+            # Run lint if a lint script exists
+            if node -e "process.exit(require('./package.json').scripts?.lint ? 0 : 1)" 2>/dev/null; then
+              npm run lint 2>&1 | tee -a /tmp/test-output.txt || ERRORS+="Lint check failed.\n"
+            fi
+            echo "::endgroup::"
+          fi
+
+          # ── Python ─────────────────────────────────────────────────────────
+          if compgen -G "*.py" > /dev/null || [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
+            echo "::group::Python checks"
+            pip install --quiet flake8 pytest 2>&1 || true
+            if compgen -G "test_*.py" > /dev/null || compgen -G "*_test.py" > /dev/null || [ -d "tests" ]; then
+              python -m pytest --tb=short 2>&1 | tee /tmp/test-output.txt || ERRORS+="Python tests failed.\n"
+            fi
+            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics 2>&1 \
+              | tee -a /tmp/test-output.txt || ERRORS+="Python syntax/import errors detected.\n"
+            echo "::endgroup::"
+          fi
+
+          # ── Go ──────────────────────────────────────────────────────────────
+          if [ -f "go.mod" ]; then
+            echo "::group::Go checks"
+            go test ./... 2>&1 | tee /tmp/test-output.txt || ERRORS+="Go tests failed.\n"
+            go vet ./... 2>&1 | tee -a /tmp/test-output.txt || ERRORS+="Go vet found issues.\n"
+            echo "::endgroup::"
+          fi
+
+          # ── Ruby ─────────────────────────────────────────────────────────
+          if [ -f "Gemfile" ]; then
+            echo "::group::Ruby checks"
+            bundle install --quiet 2>&1 || true
+            bundle exec rspec 2>&1 | tee /tmp/test-output.txt || ERRORS+="Ruby tests failed.\n"
+            echo "::endgroup::"
+          fi
+
+          # ── Rust ─────────────────────────────────────────────────────────
+          if [ -f "Cargo.toml" ]; then
+            echo "::group::Rust checks"
+            cargo test 2>&1 | tee /tmp/test-output.txt || ERRORS+="Rust tests failed.\n"
+            cargo clippy -- -D warnings 2>&1 | tee -a /tmp/test-output.txt || ERRORS+="Clippy warnings found.\n"
+            echo "::endgroup::"
+          fi
+
+          # ── Java / Maven ─────────────────────────────────────────────────
+          if [ -f "pom.xml" ]; then
+            echo "::group::Maven checks"
+            mvn -q test 2>&1 | tee /tmp/test-output.txt || ERRORS+="Maven tests failed.\n"
+            echo "::endgroup::"
+          fi
+
+          # Persist errors for the next step
+          if [ -n "$ERRORS" ]; then
+            printf "%b" "$ERRORS" > /tmp/errors.txt
+            echo "bugs_found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bugs_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read check output
+        if: steps.checks.outputs.bugs_found == 'true'
+        id: read-output
+        shell: bash
+        run: |
+          ERRORS=$(cat /tmp/errors.txt 2>/dev/null || echo "Unknown errors detected.")
+          OUTPUT=$(tail -100 /tmp/test-output.txt 2>/dev/null || echo "No output captured.")
+          # Truncate to avoid GitHub API limits
+          OUTPUT="${OUTPUT:0:6000}"
+          {
+            echo "errors<<EOF"
+            echo "$ERRORS"
+            echo "EOF"
+            echo "output<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create bug issue and assign to Copilot
+        if: steps.checks.outputs.bugs_found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const errors  = `${{ steps.read-output.outputs.errors }}`;
+            const output  = `${{ steps.read-output.outputs.output }}`;
+            const branch  = context.ref.replace('refs/heads/', '');
+            const sha     = context.sha.slice(0, 7);
+            const runUrl  = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const title = `🐛 [PestControl] Automated bug report – ${branch} @ ${sha}`;
+
+            const body = [
+              '> **This issue was automatically created by the PestControl Bug Detection workflow.**',
+              '',
+              '## Summary',
+              errors,
+              '',
+              '## Failing output (last 100 lines)',
+              '```',
+              output,
+              '```',
+              '',
+              '## Context',
+              `- **Branch:** \`${branch}\``,
+              `- **Commit:** \`${sha}\``,
+              `- **Workflow run:** ${runUrl}`,
+              '',
+              '---',
+              '_Assign this issue to **@github-copilot** to have it automatically propose a fix._',
+            ].join('\n');
+
+            // Ensure the "bug" label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'bug',
+              });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  'bug',
+                color: 'd73a4a',
+                description: 'Something isn\'t working',
+              });
+            }
+
+            // Avoid duplicate open issues for the same commit
+            const existing = await github.rest.issues.listForRepo({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              state:  'open',
+              labels: 'bug',
+            });
+            const duplicate = existing.data.find(i => i.title === title);
+            if (duplicate) {
+              console.log(`Duplicate issue already open: #${duplicate.number}`);
+              return;
+            }
+
+            const issue = await github.rest.issues.create({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              title,
+              body,
+              labels: ['bug'],
+            });
+            console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
