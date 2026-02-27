@@ -85,6 +85,31 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # ── C++ ──────────────────────────────────────────────────────────
+          if [ -f "CMakeLists.txt" ] || [ -f "Makefile" ]; then
+            echo "::group::C++ checks"
+            if [ -f "CMakeLists.txt" ]; then
+              cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug 2>&1 | tee /tmp/test-output.txt \
+                || ERRORS+="C++ CMake configure failed.\n"
+              cmake --build build 2>&1 | tee -a /tmp/test-output.txt \
+                || ERRORS+="C++ build failed.\n"
+              ctest --test-dir build --output-on-failure 2>&1 | tee -a /tmp/test-output.txt \
+                || ERRORS+="C++ tests failed.\n"
+            elif [ -f "Makefile" ]; then
+              make 2>&1 | tee /tmp/test-output.txt || ERRORS+="C++ make build failed.\n"
+              if make -n test > /dev/null 2>&1; then
+                make test 2>&1 | tee -a /tmp/test-output.txt || ERRORS+="C++ tests failed.\n"
+              fi
+            fi
+            if command -v cppcheck > /dev/null 2>&1; then
+              cppcheck --error-exitcode=1 --enable=warning,portability \
+                $(find . -name "*.cpp" -o -name "*.cxx" -o -name "*.cc" -o -name "*.h" -o -name "*.hpp" \
+                  | grep -v "^./build/") 2>&1 \
+                | tee -a /tmp/test-output.txt || ERRORS+="cppcheck warnings found.\n"
+            fi
+            echo "::endgroup::"
+          fi
+
           # Persist errors for the next step
           if [ -n "$ERRORS" ]; then
             printf "%b" "$ERRORS" > /tmp/errors.txt
