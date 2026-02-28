@@ -58,6 +58,8 @@ Push / PR  ──►  Bug Detection workflow
 | Rust | `cargo test` | `cargo clippy` |
 | Ruby | `bundle exec rspec` | — |
 | Java | `mvn test` | — |
+| C++ | `ctest` (CMake) / `make test` | `cppcheck` |
+| Arduino | `arduino-cli compile` | — |
 
 ---
 
